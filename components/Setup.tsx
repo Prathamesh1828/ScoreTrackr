@@ -8,8 +8,8 @@ interface SetupProps {
 const Setup: React.FC<SetupProps> = ({ onStart }) => {
   const [team1, setTeam1] = useState('Team A');
   const [team2, setTeam2] = useState('Team B');
-  const [overs, setOvers] = useState(5);
-  const [players, setPlayers] = useState(11);
+  const [overs, setOvers] = useState<number | string>(5);
+  const [players, setPlayers] = useState<number | string>(2);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-6">
@@ -58,7 +58,15 @@ const Setup: React.FC<SetupProps> = ({ onStart }) => {
               <input
                 type="number"
                 value={overs}
-                onChange={(e) => setOvers(parseInt(e.target.value) || 1)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '') {
+                    setOvers('');
+                  } else {
+                    const num = parseInt(val);
+                    if (!isNaN(num) && num > 0) setOvers(num);
+                  }
+                }}
                 className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-lg font-bold focus:outline-none focus:border-[#1DB954] transition-all"
               />
             </div>
@@ -67,14 +75,22 @@ const Setup: React.FC<SetupProps> = ({ onStart }) => {
               <input
                 type="number"
                 value={players}
-                onChange={(e) => setPlayers(parseInt(e.target.value) || 2)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '') {
+                    setPlayers('');
+                  } else {
+                    const num = parseInt(val);
+                    if (!isNaN(num) && num > 0) setPlayers(num);
+                  }
+                }}
                 className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-lg font-bold focus:outline-none focus:border-[#1DB954] transition-all"
               />
             </div>
           </div>
 
           <button
-            onClick={() => onStart(team1, team2, overs, players)}
+            onClick={() => onStart(team1, team2, Number(overs) || 5, Number(players) || 2)}
             className="w-full bg-[#1DB954] text-black font-black text-xl py-5 rounded-2xl shadow-[0_10px_30px_rgba(29,185,84,0.3)] hover:scale-[1.02] active:scale-95 transition-all uppercase italic tracking-tighter mt-6 group overflow-hidden relative"
           >
             <span className="relative z-10">Start Match</span>

@@ -6,35 +6,54 @@ import Toss from './components/Toss';
 import LiveScoring from './components/LiveScoring';
 import Result from './components/Result';
 
+import Lenis from 'lenis';
+
 const App: React.FC = () => {
-  const [match, setMatch] = useState<MatchState>(() => {
-    const saved = localStorage.getItem('scoretrackr_match');
-    if (saved) {
-      return JSON.parse(saved);
-    }
-    return {
-      team1: '',
-      team2: '',
-      oversPerInnings: 5,
-      playersPerTeam: 11,
-      tossWinner: null,
-      tossDecision: null,
-      battingFirst: null,
-      innings: [
-        { teamName: '', events: [], isCompleted: false },
-        { teamName: '', events: [], isCompleted: false }
-      ],
-      currentInningIndex: 0,
-      status: 'setup',
-      strikerId: 'Batsman 1',
-      nonStrikerId: 'Batsman 2',
-      bowlerId: 'Bowler 1'
-    };
+  const [match, setMatch] = useState<MatchState>({
+    team1: '',
+    team2: '',
+    oversPerInnings: 5,
+    playersPerTeam: 11,
+    tossWinner: null,
+    tossDecision: null,
+    battingFirst: null,
+    innings: [
+      { teamName: '', events: [], isCompleted: false },
+      { teamName: '', events: [], isCompleted: false }
+    ],
+    currentInningIndex: 0,
+    status: 'setup',
+    strikerId: 'Batsman 1',
+    nonStrikerId: 'Batsman 2',
+    bowlerId: 'Bowler 1'
   });
 
   useEffect(() => {
-    localStorage.setItem('scoretrackr_match', JSON.stringify(match));
-  }, [match]);
+    // Initialize Lenis for smooth scrolling
+    const lenis = new Lenis({
+      duration: 1.2,
+      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)), // Default smooth easing
+      // direction: 'vertical', // default
+      // gestureDirection: 'vertical', // default
+      // smooth: true, // default
+      // mouseMultiplier: 1, // default
+      // smoothTouch: false, // default
+      // touchMultiplier: 2, // default
+    });
+
+    function raf(time: number) {
+      lenis.raf(time);
+      requestAnimationFrame(raf);
+    }
+
+    requestAnimationFrame(raf);
+
+    return () => {
+      lenis.destroy();
+    };
+  }, []);
+
+
 
   const handleStartSetup = (t1: string, t2: string, overs: number, players: number) => {
     setMatch({
@@ -86,7 +105,6 @@ const App: React.FC = () => {
   };
 
   const handleReset = () => {
-    localStorage.removeItem('scoretrackr_match');
     window.location.reload();
   };
 

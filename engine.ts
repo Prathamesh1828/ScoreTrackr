@@ -10,7 +10,7 @@ export const calculateInningsScore = (events: BallEvent[]) => {
   events.forEach(event => {
     // Basic Runs
     totalRuns += event.runs;
-    
+
     // Extras
     if (event.type === 'wide') {
       totalRuns += 1;
@@ -129,4 +129,64 @@ export const getBowlerStats = (events: BallEvent[], playerName: string): BowlerS
     wides,
     noBalls: noballs
   };
+};
+
+export const calculatePlayerOfTheMatch = (match: import('./types').MatchState) => {
+  const allEvents = [...match.innings[0].events, ...match.innings[1].events];
+  const playerPoints: { [key: string]: { points: number; stats: string[] } } = {};
+
+  const addPoints = (name: string, p: number, reason: string) => {
+    if (!name) return;
+    if (!playerPoints[name]) playerPoints[name] = { points: 0, stats: [] };
+    playerPoints[name].points += p;
+  };
+
+  // 1. Calculate Batting Points
+  const batsmen = Array.from(new Set(allEvents.map(e => e.strikerId).filter(Boolean)));
+  batsmen.forEach(name => {
+    const stats = getBatsmanStats(allEvents, name);
+    let p = 0;
+    p += stats.runs * 1; // 1 pt per run
+    p += stats.fours * 1; // 1 bonus per 4
+    p += stats.sixes * 2; // 2 bonus per 6
+    if (stats.runs >= 50) p += 10; // Milestone bonus
+    if (stats.runs >= 100) p += 20;
+
+    if (p > 0) {
+      if (!playerPoints[name]) playerPoints[name] = { points: 0, stats: [] };
+      playerPoints[name].points += p;
+      if (stats.runs > 20) playerPoints[name].stats.push(`${stats.runs} Runs`);
+    }
+  });
+
+  // 2. Calculate Bowling Points
+  const bowlers = Array.from(new Set(allEvents.map(e => e.bowlerId).filter(Boolean)));
+  bowlers.forEach(name => {
+    const stats = getBowlerStats(allEvents, name);
+    let p = 0;
+    p += stats.wickets * 20; // 20 pts per wicket
+    if (stats.wickets >= 3) p += 10;
+    if (stats.wickets >= 5) p += 20;
+
+    if (p > 0) {
+      if (!playerPoints[name]) playerPoints[name] = { points: 0, stats: [] };
+      playerPoints[name].points += p;
+      if (stats.wickets > 0) playerPoints[name].stats.push(`${stats.wickets} Wickets`);
+    }
+  });
+
+  // Find Winner
+  let maxPoints = -1;
+  let winner = "None";
+  let winnerStats = "";
+
+  Object.entries(playerPoints).forEach(([name, data]) => {
+    if (data.points > maxPoints) {
+      maxPoints = data.points;
+      winner = name;
+      winnerStats = data.stats.join(' & ');
+    }
+  });
+
+  return { name: winner, points: maxPoints, stats: winnerStats };
 };

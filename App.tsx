@@ -12,7 +12,7 @@ const App: React.FC = () => {
   const [match, setMatch] = useState<MatchState>({
     team1: '',
     team2: '',
-    oversPerInnings: 5,
+    oversPerInnings: 4,
     playersPerTeam: 11,
     tossWinner: null,
     tossDecision: null,

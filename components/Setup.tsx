@@ -8,8 +8,8 @@ interface SetupProps {
 const Setup: React.FC<SetupProps> = ({ onStart }) => {
   const [team1, setTeam1] = useState('Team A');
   const [team2, setTeam2] = useState('Team B');
-  const [overs, setOvers] = useState<number | string>(5);
-  const [players, setPlayers] = useState<number | string>(2);
+  const [overs, setOvers] = useState<number | string>(4);
+  const [players, setPlayers] = useState<number | string>(11);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-6">

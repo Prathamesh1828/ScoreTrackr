@@ -211,8 +211,15 @@ const Toss: React.FC<TossProps> = ({ team1, team2, onComplete, onBack }) => {
 
             {decision && (
               <button
-                onClick={() => onComplete(winner, decision)}
-                className="w-full bg-white text-black font-bold py-6 rounded-3xl text-2xl uppercase mt-4 shadow-xl hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-4"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (winner && decision) {
+                    console.log("Starting match with:", winner, decision);
+                    onComplete(winner, decision);
+                  }
+                }}
+                className="relative z-50 w-full bg-white text-black font-bold py-6 rounded-3xl text-2xl uppercase mt-4 shadow-xl hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-4"
               >
                 Start Match
                 <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M13 5l7 7m0 0l-7 7m7-7H3" /></svg>

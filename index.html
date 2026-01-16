@@ -1,6 +1,6 @@
-
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -16,26 +16,145 @@
             padding: 0;
             overscroll-behavior: none;
         }
+
         .glass {
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
+
         .stadium-glow {
             box-shadow: 0 0 15px rgba(29, 185, 84, 0.3);
         }
+
         .accent-glow {
             box-shadow: 0 0 15px rgba(163, 255, 18, 0.4);
         }
+
         @keyframes flip {
-            0% { transform: rotateY(0); }
-            100% { transform: rotateY(1800deg); }
+            0% {
+                transform: rotateY(0);
+            }
+
+            100% {
+                transform: rotateY(1800deg);
+            }
         }
+
         .animate-flip {
             animation: flip 2s ease-out forwards;
         }
+
+        @keyframes floatFade {
+            0% {
+                transform: translateY(0);
+                opacity: 0;
+            }
+
+            5% {
+                opacity: 1;
+            }
+
+            60% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+
+            100% {
+                transform: translateY(-80px);
+                opacity: 0;
+            }
+        }
+
+        /* Responsive Utilities */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Prevent horizontal overflow */
+        html,
+        body {
+            overflow-x: hidden;
+            width: 100%;
+        }
+
+        /* Ensure minimum touch target size */
+        button,
+        a,
+        input[type="button"],
+        input[type="submit"] {
+            min-height: 44px;
+            min-width: 44px;
+        }
+
+        /* Scrollbar styling for mobile */
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* Mobile-friendly text selection */
+        ::selection {
+            background-color: rgba(29, 185, 84, 0.3);
+        }
+
+        /* Phase 3: Extra Small Screen Optimizations */
+        @media (max-width: 375px) {
+
+            /* Increase base font size slightly for readability */
+            body {
+                font-size: 14px;
+            }
+
+            /* Ensure adequate spacing on very small screens */
+            .glass {
+                padding: 1rem !important;
+            }
+
+            /* Make buttons more prominent on small screens */
+            button {
+                font-size: 14px;
+                padding: 12px 16px;
+            }
+
+            /* Reduce excessive padding on small screens */
+            h1,
+            h2,
+            h3 {
+                line-height: 1.2;
+            }
+        }
+
+        /* Landscape mobile optimization */
+        @media (max-height: 500px) and (orientation: landscape) {
+
+            /* Reduce vertical spacing in landscape */
+            .min-h-screen {
+                min-height: auto;
+            }
+        }
+
+        /* Improve focus visibility for accessibility */
+        *:focus-visible {
+            outline: 2px solid #1DB954;
+            outline-offset: 2px;
+        }
+
+        /* Smooth scrolling for better UX */
+        html {
+            scroll-behavior: smooth;
+        }
+
+        /* Prevent text size adjustment on orientation change */
+        html {
+            -webkit-text-size-adjust: 100%;
+        }
     </style>
-<script type="importmap">
+    <script type="importmap">
 {
   "imports": {
     "react": "https://esm.sh/react@^19.2.3",
@@ -44,10 +163,12 @@
   }
 }
 </script>
-<link rel="stylesheet" href="/index.css">
+    <link rel="stylesheet" href="/index.css">
 </head>
+
 <body>
     <div id="root"></div>
-<script type="module" src="/index.tsx"></script>
+    <script type="module" src="/index.tsx"></script>
 </body>
+
 </html>

@@ -1,14 +1,21 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { MatchState, BallEvent, BallType, DismissalType } from '../types';
 import { calculateInningsScore, getBatsmanStats, getBowlerStats } from '../engine';
+import SpectatorReactionBar from './SpectatorReactionBar';
+import MatchAnalyticsCard from './MatchAnalyticsCard';
+import FloatingCommentary from './FloatingCommentary';
+import LiveInteractionFeed from './LiveInteractionFeed';
+import { useAutoCommentary } from '../hooks/useAutoCommentary';
 
 interface LiveScoringProps {
   match: MatchState;
   onUpdate: (match: MatchState) => void;
   onExit: () => void;
+  isSpectator?: boolean;
+  matchId?: string;
 }
 
-const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) => {
+const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit, isSpectator = false, matchId }) => {
   const currentInning = match.innings[match.currentInningIndex];
   const { totalRuns, totalWickets, legalBalls, overs, totalExtras } = calculateInningsScore(currentInning.events);
 
@@ -22,8 +29,19 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
   const [activeTab, setActiveTab] = useState<'score' | 'card' | 'timeline'>('score');
   const [selectedExtra, setSelectedExtra] = useState<BallType | null>(null);
 
+  // Auto Commentary (Spectator Only)
+  const { commentaries, removeCommentary } = useAutoCommentary(match, isSpectator);
+
   // Animation Overlay State
   const [overlay, setOverlay] = useState<{ type: '4' | '6' | 'W' | 'FH' | 'HAT'; visible: boolean } | null>(null);
+
+  // Track last event count for spectators to detect new balls
+  const lastEventCountRef = useRef(currentInning.events.length);
+
+  // Spectator count state with animation
+  const [spectatorCount, setSpectatorCount] = useState(0);
+  const [prevSpectatorCount, setPrevSpectatorCount] = useState(0);
+  const [countAnimation, setCountAnimation] = useState<'up' | 'down' | null>(null);
 
   useEffect(() => {
     if (overlay?.visible) {
@@ -31,6 +49,183 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
       return () => clearTimeout(timer);
     }
   }, [overlay]);
+
+  // Track spectator count using database heartbeat
+  const viewerTrackingSetup = useRef(false);
+
+  useEffect(() => {
+    if (!matchId) {
+      console.log('No matchId, skipping viewer tracking');
+      return;
+    }
+
+    // Prevent duplicate setup in React StrictMode
+    if (viewerTrackingSetup.current) {
+      console.log('Viewer tracking already set up, skipping');
+      return;
+    }
+    viewerTrackingSetup.current = true;
+
+    // Use sessionStorage to create a persistent viewer ID that survives React StrictMode
+    const storageKey = `viewer-id-${matchId}`;
+    let viewerId = sessionStorage.getItem(storageKey);
+
+    if (!viewerId) {
+      viewerId = `viewer-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      sessionStorage.setItem(storageKey, viewerId);
+      console.log('Created new viewer ID:', viewerId);
+    } else {
+      console.log('Using existing viewer ID:', viewerId);
+    }
+
+    console.log('Setting up viewer tracking for match:', matchId, 'Viewer ID:', viewerId);
+
+    const setupViewerTracking = async () => {
+      const { supabase } = await import('../lib/supabase');
+
+      // Insert/update viewer record
+      const upsertViewer = async () => {
+        const { error } = await supabase
+          .from('match_viewers')
+          .upsert({
+            match_id: matchId,
+            viewer_id: viewerId,
+            role: isSpectator ? 'spectator' : 'scorer',
+            last_seen: new Date().toISOString()
+          }, {
+            onConflict: 'match_id,viewer_id'
+          });
+
+        if (error) {
+          console.error('Error upserting viewer:', error);
+        } else {
+          console.log('Viewer heartbeat sent');
+        }
+      };
+
+      // Get viewer count
+      const updateViewerCount = async () => {
+        // Clean up old viewers first
+        await supabase.rpc('cleanup_old_viewers');
+
+        const { data, error } = await supabase
+          .from('match_viewers')
+          .select('id', { count: 'exact' })
+          .eq('match_id', matchId);
+
+        if (error) {
+          console.error('Error fetching viewer count:', error);
+        } else {
+          const count = data?.length || 0;
+          console.log('Viewer count:', count);
+
+          // Trigger animation based on count change
+          if (count > spectatorCount) {
+            setCountAnimation('up');
+          } else if (count < spectatorCount) {
+            setCountAnimation('down');
+          }
+
+          setPrevSpectatorCount(spectatorCount);
+          setSpectatorCount(count);
+
+          // Reset animation after it completes
+          setTimeout(() => setCountAnimation(null), 500);
+        }
+      };
+
+      // Initial upsert and count
+      await upsertViewer();
+      await updateViewerCount();
+
+      // Send heartbeat every 10 seconds
+      const heartbeatInterval = setInterval(upsertViewer, 10000);
+
+      // Subscribe to realtime changes on match_viewers table for instant updates
+      const viewerChannel = supabase
+        .channel(`viewers:${matchId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'match_viewers',
+            filter: `match_id=eq.${matchId}`
+          },
+          (payload) => {
+            console.log('Viewer change detected:', payload);
+            // Update count immediately when any change occurs
+            setTimeout(() => {
+              supabase.rpc('cleanup_old_viewers').then(() => {
+                updateViewerCount();
+              });
+            }, 500);
+          }
+        )
+        .subscribe((status) => {
+          console.log('Viewer channel status:', status);
+        });
+
+      return { heartbeatInterval, viewerId, supabase, viewerChannel };
+    };
+
+    let intervals: any;
+    setupViewerTracking().then(result => { intervals = result; });
+
+    return () => {
+      viewerTrackingSetup.current = false;
+
+      if (intervals) {
+        console.log('Cleaning up viewer tracking for:', intervals.viewerId);
+        clearInterval(intervals.heartbeatInterval);
+
+        // Unsubscribe from realtime channel
+        if (intervals.viewerChannel) {
+          intervals.viewerChannel.unsubscribe();
+        }
+
+        // Remove viewer record and sessionStorage on unmount
+        const storageKey = `viewer-id-${matchId}`;
+        sessionStorage.removeItem(storageKey);
+
+        intervals.supabase
+          .from('match_viewers')
+          .delete()
+          .eq('match_id', matchId)
+          .eq('viewer_id', intervals.viewerId)
+          .then(() => console.log('Viewer removed from database'));
+      }
+    };
+  }, [matchId, isSpectator]);
+
+  // Spectator: Trigger animations when new events arrive
+  useEffect(() => {
+    if (isSpectator && currentInning.events.length > lastEventCountRef.current) {
+      const lastEvent = currentInning.events[currentInning.events.length - 1];
+      console.log('Spectator: New ball event detected', lastEvent);
+
+      if (lastEvent.isWicket) {
+        // Check for Hattrick
+        const bowlerEvents = currentInning.events.filter(e => e.bowlerId === lastEvent.bowlerId);
+        const last1 = bowlerEvents[bowlerEvents.length - 2];
+        const last2 = bowlerEvents[bowlerEvents.length - 3];
+
+        if (last1?.isWicket && last2?.isWicket) {
+          setOverlay({ type: 'HAT', visible: true });
+        } else {
+          setOverlay({ type: 'W', visible: true });
+        }
+      } else if (lastEvent.type === 'noball') {
+        setOverlay({ type: 'FH', visible: true });
+      } else if (lastEvent.runs === 4 && lastEvent.type === 'legal') {
+        setOverlay({ type: '4', visible: true });
+      } else if (lastEvent.runs === 6 && lastEvent.type === 'legal') {
+        setOverlay({ type: '6', visible: true });
+      }
+    }
+
+    lastEventCountRef.current = currentInning.events.length;
+  }, [currentInning.events, isSpectator]);
 
   // Determine if the current ball to be bowled is a Free Hit
   // Fixed comparison logic: TypeScript was complaining about type overlap in previous implementation
@@ -73,7 +268,7 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
     return lastEvent?.isWicket || false;
   }, [currentInning.events]);
 
-  const isEditable = isNewOver || lastBallWasWicket;
+  const isEditable = !isSpectator && (isNewOver || lastBallWasWicket);
 
   const currentOverEvents = useMemo(() => {
     const displayOverNum = Math.floor(legalBalls / 6);
@@ -95,7 +290,16 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
     return Array.from(new Set([...namesInLog, ...activeNames])).filter(Boolean);
   }, [currentInning.events, match.strikerId, match.nonStrikerId]);
 
+  // Extract current players for spectator message templates
+  const currentPlayers = useMemo(() => {
+    return allBatsmen.filter(name => name && name.trim() !== '');
+  }, [allBatsmen]);
+
+  // Check if match is live for spectator interactions
+  const isMatchLive = match.status === 'live';
+
   const updatePlayerName = (role: 'striker' | 'nonStriker' | 'bowler', name: string) => {
+    if (isSpectator) return;
     const newMatch = { ...match };
     if (role === 'striker') {
       newMatch.strikerId = name;
@@ -109,11 +313,25 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
     onUpdate(newMatch);
   };
 
+  const handleTimeout = () => {
+    if (isSpectator || match.status !== 'live') return;
+
+    const newMatch = { ...match };
+    newMatch.status = 'timeout';
+    newMatch.timeoutStartedAt = Date.now();
+    newMatch.timeoutReason = 'Drinks Break'; // Default reason
+    onUpdate(newMatch);
+  };
+
+
   const handleExtraToggle = (type: BallType) => {
+    if (isSpectator) return;
     setSelectedExtra(prev => prev === type ? null : type);
   };
 
   const recordBall = (runs: number, type: BallType = 'legal', wicket: boolean = false) => {
+    if (match.status === 'innings_break' || match.status === 'timeout') return; // Block scoring during innings break or timeout
+    if (isSpectator) return;
     const penalty = (type === 'wide' || type === 'noball' ? 1 : 0);
     const newTotalRuns = totalRuns + runs + penalty;
     const newWickets = totalWickets + (wicket ? 1 : 0);
@@ -186,10 +404,10 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
     const totalPossibleBalls = match.oversPerInnings * 6;
     if (newMatch.currentInningIndex === 0) {
       if (newLegalBalls === totalPossibleBalls || newWickets === maxWickets) {
-        newMatch.currentInningIndex = 1;
-        newMatch.strikerId = "Batsman 1 (Inn 2)";
-        newMatch.nonStrikerId = "Batsman 2 (Inn 2)";
-        newMatch.bowlerId = "Bowler 1 (Inn 2)";
+        // Trigger innings break instead of immediately switching
+        newMatch.status = 'innings_break';
+        newMatch.inningsBreakStartedAt = Date.now();
+        newMatch.innings[0].isCompleted = true;
       }
     } else {
       const isTargetReached = target && newTotalRuns >= target;
@@ -205,6 +423,7 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
   };
 
   const undoLast = () => {
+    if (isSpectator) return;
     const newMatch = { ...match };
     const currentEvents = newMatch.innings[newMatch.currentInningIndex].events;
     if (currentEvents.length === 0) {
@@ -289,48 +508,122 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
       )}
 
       {/* Sticky Header */}
-      <div className="sticky top-0 z-50 glass border-b border-white/10 p-4 shadow-2xl">
-        <div className="flex justify-between items-center max-w-4xl mx-auto">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={onExit}
-              className="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 text-[10px] font-black uppercase tracking-widest transition-colors border border-red-500/20"
-              title="Exit Match"
-            >
-              EXIT MATCH
-            </button>
-            <div className="animate-in slide-in-from-left-4 duration-500">
-              <h1 className="text-[#1DB954] font-bold text-[10px] uppercase tracking-widest mb-1">{currentInning.teamName} BATTING</h1>
-              <div className="flex items-baseline gap-2">
-                <span className="text-5xl font-bold tabular-nums drop-shadow-[0_2px_10px_rgba(29,185,84,0.2)]">
-                  {totalRuns}<span className="text-[#A3FF12]/50 mx-1">-</span>{totalWickets}
-                </span>
-                <span className="text-xl font-bold text-gray-500">({overs})</span>
-              </div>
+      <div className="sticky top-0 z-50 glass border-b border-white/10 px-3 py-2 shadow-2xl">
+        <div className="flex justify-between items-start max-w-4xl mx-auto">
+          {/* Left: Score Info */}
+          <div className="animate-in slide-in-from-left-4 duration-500">
+            <div className="flex items-center gap-2 mb-0.5">
+              <h1 className="text-[#1DB954] font-bold text-[10px] uppercase tracking-widest">{currentInning.teamName} BATTING</h1>
+              {isSpectator && (
+                <span className="bg-red-600 text-white text-[8px] font-bold px-1.5 py-0.5 rounded animate-pulse">LIVE</span>
+              )}
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-5xl font-bold tabular-nums drop-shadow-[0_2px_10px_rgba(29,185,84,0.2)]">
+                {totalRuns}<span className="text-[#A3FF12]/50 mx-1">-</span>{totalWickets}
+              </span>
+              <span className="text-xl font-bold text-gray-500">({overs})</span>
             </div>
           </div>
+
+          {/* Right: Action Buttons */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                if (!matchId) {
+                  alert('This is a local match and cannot be shared.');
+                  return;
+                }
+                const joinUrl = `${window.location.origin}/?matchId=${matchId}`;
+                navigator.clipboard.writeText(joinUrl).then(() => {
+                  alert(`Match link copied to clipboard!\n\nShare this link with spectators:\n${joinUrl}`);
+                }).catch(() => {
+                  alert(`Failed to copy link. Please copy manually:\n\n${joinUrl}`);
+                });
+              }}
+              className="px-3 py-2 rounded-lg bg-[#1DB954]/10 hover:bg-[#1DB954]/20 text-[#1DB954] transition-colors border border-[#1DB954]/20 flex items-center gap-2"
+              title="Share Match"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+              <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">SHARE</span>
+            </button>
+            {!isSpectator && match.status === 'live' && (
+              <button
+                onClick={handleTimeout}
+                className="px-3 py-2 rounded-lg bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 text-[10px] font-black uppercase tracking-widest transition-colors border border-yellow-500/20"
+                title="Pause Match"
+              >
+                ⏸ TIMEOUT
+              </button>
+            )}
+            <button
+              onClick={onExit}
+              className="px-3 py-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 text-[10px] font-black uppercase tracking-widest transition-colors border border-red-500/20"
+              title={isSpectator ? "Exit Spectate Mode" : "End Match"}
+            >
+              {isSpectator ? 'END SPECTATE' : 'END MATCH'}
+            </button>
+          </div>
+        </div>
+
+        {/* Spectator Count and Match Info Row */}
+        <div className="flex justify-between items-center max-w-4xl mx-auto mt-1">
+          {/* Left: Match Info */}
+          <div className="text-xs text-gray-500 uppercase tracking-widest font-bold">
+            {match.currentInningIndex === 0 ? '1st' : '2nd'} Innings • {match.playersPerTeam} Players
+          </div>
+
+          {/* Right: Spectator Count - Only show if online match */}
+          {matchId && (
+            <div className="flex items-center gap-2 bg-white/5 px-3 py-1 rounded-lg border border-white/10">
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+              </div>
+              <div className="relative overflow-hidden h-5 flex items-center">
+                <span
+                  className={`text-xs font-bold text-gray-300 transition-all duration-500 ${countAnimation === 'up' ? 'animate-roll-up' :
+                    countAnimation === 'down' ? 'animate-roll-down' : ''
+                    }`}
+                  key={spectatorCount}
+                >
+                  {spectatorCount} {spectatorCount === 1 ? 'viewer' : 'viewers'}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Free Hit / Target Info */}
+        <div className="flex justify-end items-center max-w-4xl mx-auto mt-1">
           <div className="text-right flex flex-col items-end gap-1">
             {isFreeHit && (
               <div className="flex items-center gap-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-3 py-1 rounded-md text-[9px] font-black italic tracking-widest animate-pulse border border-white/20">
                 FREE HIT
               </div>
             )}
-            {target ? (
+            {target && (
               <div className="space-y-1">
-                <div className="bg-[#A3FF12] text-black px-4 py-1.5 rounded-full text-[10px] font-black animate-pulse">
-                  NEED {runsNeeded} IN {(match.oversPerInnings * 6) - legalBalls} BALLS
+                <div className={`px-4 py-1.5 rounded-full text-[10px] font-black animate-pulse ${runsNeeded! <= 0 ? 'bg-green-500 text-white' : 'bg-[#A3FF12] text-black'}`}>
+                  {runsNeeded! <= 0 ? (
+                    'TARGET REACHED!'
+                  ) : (
+                    `NEED ${runsNeeded} IN ${(match.oversPerInnings * 6) - legalBalls} BALLS`
+                  )}
                 </div>
                 <div className="text-[8px] text-gray-500 font-black uppercase tracking-widest text-right">Target: {target}</div>
-              </div>
-            ) : (
-              <div className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em] border border-white/10 px-3 py-1 rounded-full">
-                1ST INNINGS • {match.playersPerTeam} PLAYERS
               </div>
             )}
           </div>
         </div>
       </div>
 
+      {/* Tab Navigation - Tabs for Score/Card/Timeline */}
       <div className="flex-grow max-w-4xl mx-auto w-full p-4 space-y-6">
         <div className="flex gap-2 p-1.5 bg-white/5 rounded-2xl border border-white/5 shadow-inner">
           {['score', 'card', 'timeline'].map(tab => (
@@ -343,6 +636,9 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
             </button>
           ))}
         </div>
+
+        {/* Match Analytics Card - RRR & Win Probability */}
+        <MatchAnalyticsCard match={match} className="animate-in fade-in slide-in-from-bottom-4 duration-500" />
 
         {activeTab === 'score' && (
           <div className="space-y-6 animate-in fade-in zoom-in-95 duration-500">
@@ -556,61 +852,75 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
       </div>
 
       {/* Controller Pad */}
-      <div className="fixed bottom-0 left-0 right-0 glass border-t border-white/20 p-5 z-[60] safe-area-bottom shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
-        <div className="max-w-4xl mx-auto space-y-5">
-          <div className="flex justify-between items-center px-1">
-            <button onClick={undoLast} className="text-[10px] font-black text-red-500/80 hover:text-red-500 uppercase flex items-center gap-2 bg-red-500/5 px-4 py-2 rounded-full border border-red-500/10 active:scale-90 transition-transform">
-              Undo Ball
-            </button>
-            <div className="flex gap-4 items-center">
-              {isFreeHit && <span className="text-[9px] font-black text-purple-400 uppercase tracking-widest italic animate-pulse">Free Hit active!</span>}
-              <button
-                onClick={() => recordBall(0, selectedExtra || 'legal', true)}
-                className={`px-10 py-3 rounded-full text-[11px] font-black uppercase border-2 flex items-center gap-2 transition-all duration-300 active:scale-95 ${isFreeHit ? 'bg-red-600/20 border-red-600 text-red-500' : 'bg-red-600 border-red-600 text-white shadow-lg'}`}
-              >
-                {isFreeHit ? 'RUN OUT!' : 'WICKET!'}
-              </button>
-            </div>
-          </div>
+      {
+        !isSpectator && (
+          <div className="fixed bottom-0 left-0 right-0 glass border-t border-white/20 p-5 z-[60] safe-area-bottom shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
+            <div className="max-w-4xl mx-auto space-y-5">
+              <div className="flex justify-between items-center px-1">
+                <button onClick={undoLast} className="text-[10px] font-black text-red-500/80 hover:text-red-500 uppercase flex items-center gap-2 bg-red-500/5 px-4 py-2 rounded-full border border-red-500/10 active:scale-90 transition-transform">
+                  Undo Ball
+                </button>
+                <div className="flex gap-4 items-center">
+                  {isFreeHit && <span className="text-[9px] font-black text-purple-400 uppercase tracking-widest italic animate-pulse">Free Hit active!</span>}
+                  <button
+                    onClick={() => recordBall(0, selectedExtra || 'legal', true)}
+                    className={`px-10 py-3 rounded-full text-[11px] font-black uppercase border-2 flex items-center gap-2 transition-all duration-300 active:scale-95 ${isFreeHit ? 'bg-red-600/20 border-red-600 text-red-500' : 'bg-red-600 border-red-600 text-white shadow-lg'}`}
+                  >
+                    {isFreeHit ? 'RUN OUT!' : 'WICKET!'}
+                  </button>
+                </div>
+              </div>
 
-          <div className="grid grid-cols-6 gap-3">
-            {[0, 1, 2, 3, 4, 6].map(run => (
-              <button
-                key={run}
-                onClick={() => recordBall(run, selectedExtra || 'legal', false)}
-                className={`h-16 rounded-2xl text-2xl font-black transition-all active:scale-90 flex flex-col items-center justify-center relative overflow-hidden group
+              <div className="grid grid-cols-6 gap-3">
+                {[0, 1, 2, 3, 4, 6].map(run => (
+                  <button
+                    key={run}
+                    onClick={() => recordBall(run, selectedExtra || 'legal', false)}
+                    className={`h-16 rounded-2xl text-2xl font-black transition-all active:scale-90 flex flex-col items-center justify-center relative overflow-hidden group
                   ${selectedExtra ? 'bg-[#A3FF12]/20 border-2 border-[#A3FF12]/40 text-[#A3FF12]' : (run === 4 || run === 6 ? 'bg-[#1DB954] text-black shadow-[#1DB954]/20' : 'bg-white/10 text-white border border-white/5')}
                 `}
-              >
-                <div className="relative z-10">{run}</div>
-                <span className={`relative z-10 text-[8px] uppercase tracking-widest mt-1 ${selectedExtra ? 'text-[#A3FF12]' : (run >= 4 ? 'text-black/60' : 'opacity-40')}`}>
-                  {selectedExtra ? `+ ${selectedExtra.slice(0, 2).toUpperCase()}` : (run === 1 ? 'Run' : 'Runs')}
-                </span>
-                {isFreeHit && <div className="absolute top-0 left-0 w-2 h-2 bg-purple-600"></div>}
-                <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-              </button>
-            ))}
-          </div>
+                  >
+                    <div className="relative z-10">{run}</div>
+                    <span className={`relative z-10 text-[8px] uppercase tracking-widest mt-1 ${selectedExtra ? 'text-[#A3FF12]' : (run >= 4 ? 'text-black/60' : 'opacity-40')}`}>
+                      {selectedExtra ? `+ ${selectedExtra.slice(0, 2).toUpperCase()}` : (run === 1 ? 'Run' : 'Runs')}
+                    </span>
+                    {isFreeHit && <div className="absolute top-0 left-0 w-2 h-2 bg-purple-600"></div>}
+                    <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+                  </button>
+                ))}
+              </div>
 
-          <div className="grid grid-cols-4 gap-3 pb-2">
-            {[
-              { id: 'wide', label: 'Wide', sub: '+1 WD' },
-              { id: 'noball', label: 'No Ball', sub: '+1 NB' },
-              { id: 'legbye', label: 'Leg Bye', sub: 'LB' },
-              { id: 'bye', label: 'Bye', sub: 'BYE' }
-            ].map(type => (
-              <button
-                key={type.id}
-                onClick={() => handleExtraToggle(type.id as BallType)}
-                className={`flex flex-col items-center justify-center py-3 rounded-2xl font-black border-2 transition-all active:scale-95 ${selectedExtra === type.id ? 'bg-[#A3FF12] text-black border-[#A3FF12] scale-105 shadow-[0_0_15px_rgba(163,255,18,0.5)]' : 'bg-white/5 border-white/5 text-gray-500'}`}
-              >
-                <span className="text-xs uppercase tracking-tighter">{type.label}</span>
-                <span className={`text-[8px] font-bold uppercase mt-0.5 ${selectedExtra === type.id ? 'text-black/60' : 'text-gray-700'}`}>{type.sub}</span>
-              </button>
-            ))}
+              <div className="grid grid-cols-4 gap-3 pb-2">
+                {[
+                  { id: 'wide', label: 'Wide', sub: '+1 WD' },
+                  { id: 'noball', label: 'No Ball', sub: '+1 NB' },
+                  { id: 'legbye', label: 'Leg Bye', sub: 'LB' },
+                  { id: 'bye', label: 'Bye', sub: 'BYE' }
+                ].map(type => (
+                  <button
+                    key={type.id}
+                    onClick={() => handleExtraToggle(type.id as BallType)}
+                    className={`flex flex-col items-center justify-center py-3 rounded-2xl font-black border-2 transition-all active:scale-95 ${selectedExtra === type.id ? 'bg-[#A3FF12] text-black border-[#A3FF12] scale-105 shadow-[0_0_15px_rgba(163,255,18,0.5)]' : 'bg-white/5 border-white/5 text-gray-500'}`}
+                  >
+                    <span className="text-xs uppercase tracking-tighter">{type.label}</span>
+                    <span className={`text-[8px] font-bold uppercase mt-0.5 ${selectedExtra === type.id ? 'text-black/60' : 'text-gray-700'}`}>{type.sub}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        )
+      }
+
+      {/* Spectator Reaction Bar - Only for spectators */}
+      {isSpectator && matchId && (
+        <SpectatorReactionBar matchId={matchId} isMatchLive={isMatchLive} />
+      )}
+
+      {/* Live Interaction Feed (including floating emojis) - Only for spectators */}
+      {isSpectator && matchId && (
+        <LiveInteractionFeed matchId={matchId} />
+      )}
 
       <style>{`
         .scrollbar-hide::-webkit-scrollbar { display: none; }
@@ -625,9 +935,32 @@ const LiveScoring: React.FC<LiveScoringProps> = ({ match, onUpdate, onExit }) =>
         .animate-shake {
           animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
         }
+        @keyframes roll-up {
+          0% { transform: translateY(100%); opacity: 0; }
+          100% { transform: translateY(0); opacity: 1; }
+        }
+        @keyframes roll-down {
+          0% { transform: translateY(-100%); opacity: 0; }
+          100% { transform: translateY(0); opacity: 1; }
+        }
+        .animate-roll-up {
+          animation: roll-up 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        }
+        .animate-roll-down {
+          animation: roll-down 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        }
         .tabular-nums { font-variant-numeric: tabular-nums; }
       `}</style>
-    </div >
+
+      {/* Floating Auto Commentary (Spectator Only) */}
+      {isSpectator && commentaries.map((commentary) => (
+        <FloatingCommentary
+          key={commentary.id}
+          commentary={commentary}
+          onComplete={removeCommentary}
+        />
+      ))}
+    </div>
   );
 };
 

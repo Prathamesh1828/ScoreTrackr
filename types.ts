@@ -45,10 +45,18 @@ export interface MatchState {
   battingFirst: string | null;
   innings: [Inning, Inning];
   currentInningIndex: 0 | 1;
-  status: 'setup' | 'toss' | 'live' | 'finished';
+  status: 'setup' | 'toss' | 'live' | 'timeout' | 'innings_break' | 'finished' | 'waiting';
   strikerId: string;
   nonStrikerId: string;
   bowlerId: string;
+
+  // Innings break tracking
+  inningsBreakStartedAt?: number; // Timestamp when break started
+  nextInningsStartsAt?: number;   // Optional: scheduled start time
+
+  // Timeout tracking
+  timeoutStartedAt?: number;       // Timestamp when timeout started
+  timeoutReason?: string;          // Optional reason for timeout
 }
 
 export interface BatsmanStats {
@@ -72,3 +80,57 @@ export interface BowlerStats {
   wides: number;
   noBalls: number;
 }
+
+export interface InningsSummary {
+  teamName: string;
+  totalRuns: number;
+  totalWickets: number;
+  overs: string;
+  topBatsman: {
+    name: string;
+    runs: number;
+    balls: number;
+  } | null;
+  topBowler: {
+    name: string;
+    wickets: number;
+    runs: number;
+    overs: string;
+  } | null;
+  extras: number;
+}
+
+// ============================================================================
+// SPECTATOR INTERACTION TYPES
+// ============================================================================
+
+export type ReactionType = 'clap' | 'fire' | 'support' | 'wow';
+export type MessageTemplateKey = 'team_support' | 'player_support' | 'big_moment' | 'need_wicket' | 'well_played';
+
+export interface MatchReaction {
+  id: string;
+  match_id: string;
+  reaction: ReactionType;
+  team?: 'A' | 'B';
+  created_at: string;
+}
+
+export interface SpectatorMessage {
+  id: string;
+  match_id: string;
+  template_key: MessageTemplateKey;
+  team?: string;
+  player?: string;
+  created_at: string;
+}
+
+export interface InteractionFeedItem {
+  id: string;
+  type: 'reaction' | 'message';
+  content: string; // Rendered message or emoji
+  count?: number; // For aggregated reactions
+  timestamp: number;
+  isOptimistic?: boolean; // For optimistic UI updates
+  x?: number; // For floating animations (0-100 percentage)
+}
+

@@ -190,3 +190,52 @@ export const calculatePlayerOfTheMatch = (match: import('./types').MatchState) =
 
   return { name: winner, points: maxPoints, stats: winnerStats };
 };
+
+export const generateInningsSummary = (inning: import('./types').Inning): import('./types').InningsSummary => {
+  const { totalRuns, totalWickets, overs, totalExtras } = calculateInningsScore(inning.events);
+
+  // Find all unique batsmen
+  const batsmen = Array.from(new Set(inning.events.map(e => e.strikerId).filter(Boolean)));
+  let topBatsman = null;
+  let maxRuns = 0;
+
+  batsmen.forEach(name => {
+    const stats = getBatsmanStats(inning.events, name);
+    if (stats.runs > maxRuns) {
+      maxRuns = stats.runs;
+      topBatsman = {
+        name: stats.name,
+        runs: stats.runs,
+        balls: stats.balls
+      };
+    }
+  });
+
+  // Find all unique bowlers
+  const bowlers = Array.from(new Set(inning.events.map(e => e.bowlerId).filter(Boolean)));
+  let topBowler = null;
+  let maxWickets = 0;
+
+  bowlers.forEach(name => {
+    const stats = getBowlerStats(inning.events, name);
+    if (stats.wickets > maxWickets || (stats.wickets === maxWickets && (!topBowler || stats.runs < topBowler.runs))) {
+      maxWickets = stats.wickets;
+      topBowler = {
+        name: stats.name,
+        wickets: stats.wickets,
+        runs: stats.runs,
+        overs: stats.overs
+      };
+    }
+  });
+
+  return {
+    teamName: inning.teamName,
+    totalRuns,
+    totalWickets,
+    overs,
+    topBatsman,
+    topBowler,
+    extras: totalExtras
+  };
+};

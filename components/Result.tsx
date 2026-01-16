@@ -2,14 +2,29 @@ import React, { useState } from 'react';
 import { MatchState } from '../types';
 import { calculateInningsScore, calculatePlayerOfTheMatch } from '../engine';
 import Scorecard from './Scorecard';
+import { transitionToWaiting } from '../lib/supabase';
 
 interface ResultProps {
   match: MatchState;
   onReset: () => void;
+  matchId?: string;
+  isOnlineMatch?: boolean;
+  onStartNewMatch?: () => void;
 }
 
-const Result: React.FC<ResultProps> = ({ match, onReset }) => {
+const Result: React.FC<ResultProps> = ({ match, onReset, matchId, isOnlineMatch = false, onStartNewMatch }) => {
   const [activeTab, setActiveTab] = useState<0 | 1>(0);
+
+  // Auto-transition to waiting state for online matches (only if scorer is present)
+  React.useEffect(() => {
+    if (isOnlineMatch && matchId && onStartNewMatch) {
+      // Transition to waiting after a short delay to allow everybody to see the result
+      const timer = setTimeout(() => {
+        transitionToWaiting(matchId).catch(console.error);
+      }, 5000); // 5 seconds delay
+      return () => clearTimeout(timer);
+    }
+  }, [isOnlineMatch, matchId, onStartNewMatch]);
 
   const i1 = calculateInningsScore(match.innings[0].events);
   const i2 = calculateInningsScore(match.innings[1].events);
@@ -115,13 +130,36 @@ const Result: React.FC<ResultProps> = ({ match, onReset }) => {
       </div>
 
       {/* Footer / Reset */}
-      <div className="p-4 sm:p-6 text-center pb-8 sm:pb-12">
-        <button
-          onClick={onReset}
-          className="bg-[#1DB954] text-black font-black uppercase italic tracking-widest text-xs sm:text-sm px-6 sm:px-10 py-3 sm:py-4 rounded-full hover:scale-105 active:scale-95 transition-all shadow-[0_0_30px_rgba(29,185,84,0.4)] hover:shadow-[0_0_50px_rgba(29,185,84,0.6)]"
-        >
-          Start New Match
-        </button>
+      <div className="p-4 sm:p-6 text-center pb-8 sm:pb-12 space-y-4">
+        {/* Scorer: Start Next Match button */}
+        {onStartNewMatch && (
+          <button
+            onClick={onStartNewMatch}
+            className="bg-[#1DB954] text-black font-black uppercase italic tracking-widest text-xs sm:text-sm px-6 sm:px-10 py-3 sm:py-4 rounded-full hover:scale-105 active:scale-95 transition-all shadow-[0_0_30px_rgba(29,185,84,0.4)] hover:shadow-[0_0_50px_rgba(29,185,84,0.6)]"
+          >
+            Start Next Match
+          </button>
+        )}
+
+        {/* Offline: Start New Match button */}
+        {!isOnlineMatch && !onStartNewMatch && (
+          <button
+            onClick={onReset}
+            className="bg-[#1DB954] text-black font-black uppercase italic tracking-widest text-xs sm:text-sm px-6 sm:px-10 py-3 sm:py-4 rounded-full hover:scale-105 active:scale-95 transition-all shadow-[0_0_30px_rgba(29,185,84,0.4)] hover:shadow-[0_0_50px_rgba(29,185,84,0.6)]"
+          >
+            Start New Match
+          </button>
+        )}
+
+        {/* Spectator: End Spectate button */}
+        {isOnlineMatch && !onStartNewMatch && (
+          <button
+            onClick={() => window.location.href = '/'}
+            className="bg-red-500/20 text-red-400 border border-red-500/30 font-bold uppercase tracking-widest text-xs sm:text-sm px-6 sm:px-10 py-3 sm:py-4 rounded-full hover:scale-105 active:scale-95 transition-all hover:bg-red-500/30"
+          >
+            End Spectate
+          </button>
+        )}
       </div>
 
     </div>

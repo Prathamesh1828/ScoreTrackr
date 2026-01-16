@@ -45,7 +45,7 @@ export interface MatchState {
   battingFirst: string | null;
   innings: [Inning, Inning];
   currentInningIndex: 0 | 1;
-  status: 'setup' | 'toss' | 'live' | 'timeout' | 'innings_break' | 'finished' | 'waiting';
+  status: 'setup' | 'toss' | 'live' | 'timeout' | 'innings_break' | 'finished' | 'waiting' | 'ended';
   strikerId: string;
   nonStrikerId: string;
   bowlerId: string;

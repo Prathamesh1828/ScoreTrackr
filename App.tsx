@@ -16,8 +16,8 @@ import { resetMatchForNewGame, transitionToWaiting, supabase } from './lib/supab
 
 import Lenis from 'lenis';
 
-// Extended status to include 'join'
-type AppStatus = 'setup' | 'join' | 'toss' | 'live' | 'timeout' | 'innings_break' | 'waiting' | 'finished';
+// Extended status to include 'join' and 'ended'
+type AppStatus = 'setup' | 'join' | 'toss' | 'live' | 'timeout' | 'innings_break' | 'waiting' | 'finished' | 'ended';
 
 const App: React.FC = () => {
   const [match, setMatch] = useState<MatchState>({
@@ -274,13 +274,33 @@ const App: React.FC = () => {
       return;
     }
 
-    // If this is an online match and user is a scorer, delete it from database
+    // If this is an online match and user is a scorer, notify spectators then delete
     if (onlineMatchId && isScorer) {
       try {
         const { supabase } = await import('./lib/supabase');
-        console.log('Deleting match from database:', onlineMatchId);
+        console.log('Ending match and notifying spectators:', onlineMatchId);
 
-        // Delete the match (this will cascade delete match_state too)
+        // First, update match status to 'ended' so spectators see the MatchEnded screen
+        const { error: updateError } = await supabase
+          .from('match_state')
+          .update({
+            data: {
+              ...match,
+              status: 'ended'
+            },
+            updated_at: new Date().toISOString()
+          })
+          .eq('match_id', onlineMatchId);
+
+        if (updateError) {
+          console.error('Failed to update match status:', updateError);
+        } else {
+          console.log('Match status updated to "ended" - spectators notified');
+          // Wait briefly to ensure spectators receive the update
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // Now delete the match (this will cascade delete match_state too)
         const { error } = await supabase
           .from('matches')
           .delete()
@@ -416,6 +436,13 @@ const App: React.FC = () => {
           )}
           {appStatus === 'waiting' && (
             <WaitingForMatch matchId={onlineMatchId || undefined} />
+          )}
+          {appStatus === 'ended' && (
+            <MatchEnded onBack={() => {
+              setAppStatus('setup');
+              setOnlineMatchId(null);
+              setIsScorer(false);
+            }} />
           )}
           {appStatus === 'finished' && (
             <Result
